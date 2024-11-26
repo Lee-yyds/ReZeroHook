@@ -59,9 +59,14 @@ public:
         if ((ins & 0xFC000000) == 0x14000000) return ARM64_INS_TYPE::B;
         if ((ins & 0xFC000000) == 0x94000000) return ARM64_INS_TYPE::BL;
         if ((ins & 0xFF000010) == 0x54000000) return ARM64_INS_TYPE::B_COND;
-        if ((ins & 0x7F000000) == 0x34000000) return ARM64_INS_TYPE::CBZ_CBNZ;
-        if ((ins & 0x7F000000) == 0x36000000) return ARM64_INS_TYPE::TBZ_TBNZ;
-        if ((ins & 0xFF000000) == 0x58000000) return ARM64_INS_TYPE::LDR_LIT;
+        if ((ins & 0x7E000000) == 0x34000000) return ARM64_INS_TYPE::CBZ_CBNZ;  // 包括CBZ/CBNZ
+        if ((ins & 0x7E000000) == 0x36000000) return ARM64_INS_TYPE::TBZ_TBNZ;  // 包括TBZ/TBNZ
+        if ((ins & 0xFF000000) == 0x18000000) return ARM64_INS_TYPE::LDR_LIT;   // LDR (literal) 32位
+        if ((ins & 0xFF000000) == 0x58000000) return ARM64_INS_TYPE::LDR_LIT;   // LDR (literal) 64位
+        if ((ins & 0xFF000000) == 0x98000000) return ARM64_INS_TYPE::LDR_LIT;   // LDRSW (literal)
+        if ((ins & 0xFF000000) == 0x1C000000) return ARM64_INS_TYPE::LDR_LIT;   // LDR SIMD (literal) 32位
+        if ((ins & 0xFF000000) == 0x5C000000) return ARM64_INS_TYPE::LDR_LIT;   // LDR SIMD (literal) 64位
+        if ((ins & 0xFF000000) == 0x9C000000) return ARM64_INS_TYPE::LDR_LIT;   // LDR SIMD (literal) 128位
         return ARM64_INS_TYPE::UNKNOW;
     }
 
@@ -71,23 +76,65 @@ private:
         ARM64_INS_TYPE type = get_ins_type(ins);
         switch(type) {
             case ARM64_INS_TYPE::ADR:
-                return fix_adr(out_ptr, ins, old_addr, new_addr);;
+                return fix_adr(out_ptr, ins, old_addr, new_addr);
             case ARM64_INS_TYPE::ADRP:
-                return  fix_adrp(out_ptr, ins, old_addr, new_addr);// ADRP被替换为4条指令
-            case ARM64_INS_TYPE::LDR_LIT:
-                return fix_ldr(out_ptr, ins, old_addr, new_addr);;
+                return fix_adrp(out_ptr, ins, old_addr, new_addr);
             case ARM64_INS_TYPE::B:
-                return fix_b(out_ptr, ins, old_addr, new_addr);;
+                return fix_b(out_ptr, ins, old_addr, new_addr);
             case ARM64_INS_TYPE::BL:
-                return    fix_bl(out_ptr, ins, old_addr, new_addr);;  // 5 instructions
+                return fix_bl(out_ptr, ins, old_addr, new_addr);
             case ARM64_INS_TYPE::B_COND:
-                return fix_b_cond(out_ptr, ins, old_addr, new_addr);;  // 8 instructions
+                return fix_b_cond(out_ptr, ins, old_addr, new_addr);
+            case ARM64_INS_TYPE::CBZ_CBNZ:
+                return fix_cbz_cbnz(out_ptr, ins, old_addr, new_addr);
+            case ARM64_INS_TYPE::TBZ_TBNZ:
+                return fix_tbz_tbnz(out_ptr, ins, old_addr, new_addr);
+            case ARM64_INS_TYPE::LDR_LIT:
+                return fix_ldr(out_ptr, ins, old_addr, new_addr);
             default:
-                *out_ptr = ins; // 直接复制未修改的指令
+                *out_ptr = ins;
                 return 4;
         }
     }
+    // 修复CBZ/CBNZ指令
+    static size_t fix_cbz_cbnz(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
+        uint64_t pc = (uint64_t)old_addr;
 
+        // 获取跳转偏移和目标寄存器
+        uint64_t imm19 = SH_UTIL_GET_BITS_32(ins, 23, 5);
+        uint64_t offset = SH_UTIL_SIGN_EXTEND_64((imm19 << 2u), 21u);
+        uint64_t addr = pc + offset;
+
+        // 生成指令序列
+        out_ptr[0] = (ins & 0xFF00001F) | 0x40u;  // CB(N)Z Rt, #8  - 保持原有条件但改变偏移
+        out_ptr[1] = 0x14000005;                   // B #20          - 跳过加载地址部分
+        out_ptr[2] = 0x58000051;                   // LDR X17, #8    - 加载目标地址
+        out_ptr[3] = 0xd61f0220;                   // BR X17         - 跳转到目标地址
+        out_ptr[4] = addr & 0xFFFFFFFF;            // 目标地址低32位
+        out_ptr[5] = addr >> 32u;                  // 目标地址高32位
+
+        return 24;  // 6条指令
+    }
+
+// 修复TBZ/TBNZ指令
+    static size_t fix_tbz_tbnz(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
+        uint64_t pc = (uint64_t)old_addr;
+
+        // 获取位测试位置和偏移
+        uint64_t imm14 = SH_UTIL_GET_BITS_32(ins, 18, 5);
+        uint64_t offset = SH_UTIL_SIGN_EXTEND_64((imm14 << 2u), 16u);
+        uint64_t addr = pc + offset;
+
+        // 生成指令序列
+        out_ptr[0] = (ins & 0xFFF8001F) | 0x40u;  // TB(N)Z Rt, #<imm>, #8 - 保持原有条件和测试位
+        out_ptr[1] = 0x14000005;                   // B #20
+        out_ptr[2] = 0x58000051;                   // LDR X17, #8
+        out_ptr[3] = 0xd61f0220;                   // BR X17
+        out_ptr[4] = addr & 0xFFFFFFFF;
+        out_ptr[5] = addr >> 32u;
+
+        return 24;  // 6条指令
+    }
     static size_t fix_adrp(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
         uint64_t pc = (uint64_t)old_addr;
 
