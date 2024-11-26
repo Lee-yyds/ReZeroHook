@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <cstdint>
+#include <vector>
 #include <android/log.h>
 #define LOG_TAG "jiqiu2021"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -25,14 +26,25 @@ enum class ARM64_INS_TYPE {
 // 指令修复器
 class ARM64Fixer {
 public:
-    static uint32_t* fix_instructions(uint32_t* orig_code, size_t length, void* orig_addr, void* new_addr) {
-        uint32_t* fixed_code = new uint32_t[length/4];
-        memcpy(fixed_code, orig_code, length);
+    static size_t fix_instructions(uint32_t* orig_code, size_t length, void* orig_addr, void* backup_addr) {
+        size_t current_offset = 0;
 
+        // 遍历原始指令
         for(size_t i = 0; i < length/4; i++) {
-            fix_instruction(&fixed_code[i], (void*)((uintptr_t)orig_addr + i*4), new_addr);
+            uint32_t ins = orig_code[i];
+            void* cur_old_addr = (void*)((uintptr_t)orig_addr + i*4);
+            void* cur_new_addr = (void*)((uintptr_t)backup_addr + current_offset);
+
+            // 记录当前指令信息
+            LOGI("Processing instruction[%zu]: 0x%08x at old_addr: %p, new_addr: %p",
+                 i, ins, cur_old_addr, cur_new_addr);
+
+            // 直接写入到backup_addr对应位置
+            current_offset += fix_instruction((uint32_t*)((uintptr_t)backup_addr + current_offset),
+                                              ins, cur_old_addr, cur_new_addr);
         }
-        return fixed_code;
+
+        return current_offset; // 返回实际写入的总大小
     }
 
     static ARM64_INS_TYPE get_ins_type(uint32_t ins) {
@@ -48,28 +60,28 @@ public:
     }
 
 private:
-
-    static void fix_instruction(uint32_t* ins_ptr, void* old_addr, void* new_addr) {
-        uint32_t ins = *ins_ptr;
+    // 修改为返回处理后指令占用的字节数
+    static size_t fix_instruction(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
         ARM64_INS_TYPE type = get_ins_type(ins);
 
         switch(type) {
             case ARM64_INS_TYPE::ADR:
-                fix_adr(ins_ptr, old_addr, new_addr);
-                break;
+                fix_adr(out_ptr, ins, old_addr, new_addr);
+                return 4;
             case ARM64_INS_TYPE::ADRP:
-                fix_adrp(ins_ptr, old_addr, new_addr);
-                break;
+                fix_adrp(out_ptr, ins, old_addr, new_addr);
+                return 16; // ADRP被替换为4条指令
             case ARM64_INS_TYPE::LDR_LIT:
-                fix_ldr_literal(ins_ptr, old_addr, new_addr);
-                break;
+                fix_ldr_literal(out_ptr, ins, old_addr, new_addr);
+                return 4;
             default:
-                break;
+                *out_ptr = ins; // 直接复制未修改的指令
+                return 4;
         }
     }
 
-    static void fix_adr(uint32_t* ins_ptr, void* old_addr, void* new_addr) {
-        uint32_t ins = *ins_ptr;
+    // 修改fix_adr等函数的参数，添加原始指令参数
+    static void fix_adr(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
         int64_t offset = ((ins >> 5) & 0x7FFFF) << 2;
         if (ins & (1 << 23)) offset |= (0xFFFFFFFFFFFFF800);
 
@@ -79,49 +91,44 @@ private:
         // 生成新的ADR指令
         uint32_t new_ins = (ins & 0x9F00001F); // 保留opcode和寄存器
         new_ins |= ((new_offset >> 2) & 0x7FFFF) << 5;
-        *ins_ptr = new_ins;
+        *out_ptr = new_ins;
     }
 
-    static void fix_adrp(uint32_t* ins_ptr, void* old_addr, void* new_addr) {
-        uint32_t ins = *ins_ptr;
-        uint64_t old_pc = (uint64_t)old_addr;
-        uint64_t new_pc = (uint64_t)new_addr;
+    static void fix_adrp(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
+        uint64_t pc = (uint64_t)old_addr;
+        LOGI("ADRP_ARM64 fixing");
 
-        // 获取原始目标页地址
-        int32_t immhi = (ins >> 5) & 0x7ffff;
-        int32_t immlo = (ins >> 29) & 0x3;
-        int32_t imm = (immhi << 2) | immlo;
-        // 符号扩展
-        if(imm & 0x100000) {
-            imm |= 0xfff00000;
+        // 解析imm21和rd
+        uint32_t imm21 = ((ins & 0xFFFFE0)>>3) + ((ins & 0x60000000)>>29);
+        uint32_t rd = ins & 0x1F;
+
+        // 计算目标地址
+        uint64_t value = (pc & 0xfffffffffffff000) + 4096*imm21;
+        if((imm21 & 0x100000)==0x100000) {
+            LOGI("NEG");
+            value = (pc & 0xfff) - 4096 * (0x1fffff - imm21 + 1);
         }
 
-        uint64_t old_target = (old_pc & ~0xfff) + (imm << 12);
-        int64_t new_offset = ((int64_t)old_target - (new_pc & ~0xfff)) >> 12;
+        // 调试日志
+        LOGI("pc    : %lx", pc);
+        LOGI("imm21 : %x", imm21);
+        LOGI("value : %lx", value);
+        LOGI("valueh: %x", (uint32_t)(value >> 32));
+        LOGI("valuel: %x", (uint32_t)(value & 0xffffffff));
 
-        // 检查新偏移是否在范围内
-        if(new_offset > 0x100000 || new_offset < -0x100000) {
-            LOGE("ADRP offset out of range");
-            // 此时应该改用其他方式实现，比如使用字面量加载
-            uint32_t new_code[] = {
-                    0x58000050,  // LDR X16, #8
-                    0x91000210,  // ADD X16, X16, #0
-                    *((uint32_t*)&old_target),
-                    *((uint32_t*)&old_target + 1)
-            };
-            memcpy(ins_ptr, new_code, sizeof(new_code));
-            return;
-        }
+        // 生成新的指令序列
+        uint32_t new_seq[] = {
+                0x58000040 + rd,       // ldr rd, 8
+                0x14000003,           // b 12
+                (uint32_t)(value & 0xffffffff),  // target address low
+                (uint32_t)(value >> 32)          // target address high
+        };
 
-        // 生成新的ADRP指令
-        uint32_t new_ins = (ins & 0x9F00001F);
-        new_ins |= ((new_offset & 0x7FFFF) << 5);
-        new_ins |= ((new_offset & 0x180000) << 29);
-        *ins_ptr = new_ins;
+        // 写入新指令序列
+        memcpy(out_ptr, new_seq, sizeof(new_seq));
     }
 
-    static void fix_ldr_literal(uint32_t* ins_ptr, void* old_addr, void* new_addr) {
-        uint32_t ins = *ins_ptr;
+    static void fix_ldr_literal(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
         int32_t offset = ((ins >> 5) & 0x7FFFF) << 2;
         uint64_t target = (uint64_t)old_addr + offset;
         int64_t new_offset = target - (uint64_t)new_addr;
@@ -129,8 +136,9 @@ private:
         // 生成新的LDR指令
         uint32_t new_ins = (ins & 0xFF00001F);
         new_ins |= ((new_offset >> 2) & 0x7FFFF) << 5;
-        *ins_ptr = new_ins;
+        *out_ptr = new_ins;
     }
+
 };
 // 函数指针类型定义
 typedef void (*func_t)();
@@ -140,8 +148,9 @@ struct HookInfo{
     void * target_func;
     void * hook_func;
     void* backup_func;
-    uint8_t original_code[32];
+    uint8_t original_code[1024];
     size_t original_code_size;
+    size_t total_size;
 };
 static thread_local HookInfo* current_executing_hook = nullptr;
 
@@ -210,29 +219,11 @@ void hook() {
 bool backup_orig_instructions(HookInfo* info) {
     if(!info || !info->target_func) return false;
 
-    // 分析需要备份的指令长度
-    uint32_t* code = (uint32_t*)info->target_func;
-    size_t backup_size = 0;
-    size_t min_size = 16; // 至少需要备份16字节用于跳转
-
-    // 分析每条指令直到累计长度大于最小备份长度
-    while(backup_size < min_size) {
-        ARM64_INS_TYPE type = ARM64Fixer::get_ins_type(*code);
-        // 特殊处理需要额外空间的指令类型
-        if(type == ARM64_INS_TYPE::ADRP) {
-            backup_size += 16; // ADRP可能需要被替换为多条指令
-        } else {
-            backup_size += 4;
-        }
-        code++;
-    }
-
-    info->original_code_size = backup_size;
-    memcpy(info->original_code, info->target_func, backup_size);
+    info->original_code_size = 16;
+    memcpy(info->original_code, info->target_func, info->original_code_size);
 
     return true;
 }
-
 bool create_jump(void* from, void* to, bool thumb) {
     static const size_t JUMP_SIZE = 16;
 
@@ -304,30 +295,21 @@ HookInfo* createHook(void* target_func, void* hook_func) {
     for(size_t i = 0; i < hookInfo->original_code_size/4; i++) {
         LOGI("Original instruction[%zu]: 0x%08x", i, orig[i]);
     }
-    uint32_t* fixed_code = ARM64Fixer::fix_instructions(
+
+    size_t fixed_size = ARM64Fixer::fix_instructions(
             (uint32_t*)hookInfo->original_code,
             hookInfo->original_code_size,
             hookInfo->target_func,
             hookInfo->backup_func
     );
-
-    // 打印修复后的指令
-    for(size_t i = 0; i < hookInfo->original_code_size/4; i++) {
-        LOGI("Fixed instruction[%zu]: 0x%08x", i, fixed_code[i]);
-    }
-    // 构建跳板
-    // 复制修复后的指令到跳板
-    memcpy(hookInfo->backup_func, fixed_code, hookInfo->original_code_size);
-    delete[] fixed_code;
-    // 添加跳回原函数的跳转
     void* return_addr = (uint8_t*)target_func + hookInfo->original_code_size;
-    if (!create_jump((uint8_t*)trampoline + hookInfo->original_code_size,
+    // 添加跳回原函数的跳转
+    if (!create_jump((uint8_t*)hookInfo->backup_func + fixed_size,
                      return_addr, false)) {
         munmap(trampoline, trampoline_size);
         delete hookInfo;
         return nullptr;
     }
-
     // 在目标函数处写入跳转到hook函数的代码
     if (!create_jump(target_func, hook_func, false)) {
         munmap(trampoline, trampoline_size);
@@ -375,8 +357,8 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //            );
 
     HookInfo* hookInfo = createHook((void*)test, (void*)hook);
-    test();
-    inline_unhook(hookInfo);
 //    test();
+    inline_unhook(hookInfo);
+    test();
     return env->NewStringUTF(hello.c_str());
 }
