@@ -63,17 +63,27 @@ private:
     // 修改为返回处理后指令占用的字节数
     static size_t fix_instruction(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
         ARM64_INS_TYPE type = get_ins_type(ins);
-
+        uint64_t pc = (uint64_t)old_addr;
+        int trampoline_pos = 0;
         switch(type) {
             case ARM64_INS_TYPE::ADR:
                 fix_adr(out_ptr, ins, old_addr, new_addr);
-                return 4;
+                return 12;
             case ARM64_INS_TYPE::ADRP:
                 fix_adrp(out_ptr, ins, old_addr, new_addr);
                 return 16; // ADRP被替换为4条指令
             case ARM64_INS_TYPE::LDR_LIT:
                 fix_ldr_literal(out_ptr, ins, old_addr, new_addr);
-                return 4;
+                return 28;
+            case ARM64_INS_TYPE::B:
+                fix_b(out_ptr, ins, old_addr, new_addr);
+                return 20;
+            case ARM64_INS_TYPE::BL:
+                fix_bl(out_ptr, ins, old_addr, new_addr);
+                return 20;  // 5 instructions
+            case ARM64_INS_TYPE::B_COND:
+                fix_b_cond(out_ptr, ins, old_addr, new_addr);
+                return 32;  // 8 instructions
             default:
                 *out_ptr = ins; // 直接复制未修改的指令
                 return 4;
@@ -128,15 +138,109 @@ private:
         memcpy(out_ptr, new_seq, sizeof(new_seq));
     }
 
-    static void fix_ldr_literal(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
-        int32_t offset = ((ins >> 5) & 0x7FFFF) << 2;
-        uint64_t target = (uint64_t)old_addr + offset;
-        int64_t new_offset = target - (uint64_t)new_addr;
+    static size_t fix_ldr_literal(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
+        LOGI("LDR_ARM64");
+        uint64_t pc = (uint64_t)old_addr;
+        uint32_t rt = ins & 0x1f;
+        uint32_t rn = 0;
 
-        // 生成新的LDR指令
-        uint32_t new_ins = (ins & 0xFF00001F);
-        new_ins |= ((new_offset >> 2) & 0x7FFFF) << 5;
-        *out_ptr = new_ins;
+        // 找一个未使用的寄存器
+        for(int i = 0; i < 31; i++) {
+            if(i != rt) {
+                rn = i;
+                break;
+            }
+        }
+        LOGI("Rn : %d", rn);
+
+        // 计算目标地址
+        uint32_t imm19 = ((ins & 0xFFFFE0) >> 5);
+        uint64_t value = pc + 4 * imm19;
+        if((imm19 & 0x40000) == 0x40000) {
+            value = pc - 4 * (0x7ffff - imm19 + 1);
+        }
+
+        // 生成新的指令序列
+        uint32_t new_seq[] = {
+                0xa93f03e0 + rt + (rn << 10),  // STP Xt, Xn, [SP, #-0x10]
+                0x58000080 + rn,               // LDR Xn, 16
+                0xf9400000 + (rn << 5),        // LDR Xt, [Xn, 0]
+                0xf85f83e0 + rn,               // LDR Xn, [sp, #-0x8]
+                0x14000002,                    // B 8
+                (uint32_t)(value >> 32),
+                (uint32_t)(value & 0xffffffff)
+        };
+
+        memcpy(out_ptr, new_seq, sizeof(new_seq));
+        return sizeof(new_seq);
+    }
+    static size_t fix_b(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
+        LOGI("B_ARM64");
+        uint64_t pc = (uint64_t)old_addr;
+        uint32_t imm26 = ins & 0xFFFFFF;
+        uint64_t value = pc + imm26 * 4;
+
+        // 生成新的指令序列
+        uint32_t new_seq[] = {
+                0x5800007E,                    // LDR LR, 12
+                0xD63F03C0,                    // BLR LR
+                0x14000003,                    // B 12
+                (uint32_t)(value & 0xffffffff),
+                (uint32_t)(value >> 32)
+        };
+
+        memcpy(out_ptr, new_seq, sizeof(new_seq));
+        return sizeof(new_seq);
+    }
+
+    static size_t fix_bl(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
+        LOGE("BL_ARM64");
+        uint64_t pc = (uint64_t)old_addr;
+        uint32_t imm26 = ins & 0xFFFFFF;
+        uint64_t value;
+
+        if ((ins & 0xFC000000) == 0x94000000) { // 正向跳转
+            value = pc + imm26 * 4;
+        } else { // 反向跳转
+            value = pc - 4 * (0xffffff - imm26 + 1);
+        }
+
+        uint32_t new_seq[] = {
+                0x5800007E,                    // LDR LR, 12
+                0xD63F03C0,                    // BLR LR
+                0x14000003,                    // B 12
+                (uint32_t)(value & 0xffffffff),
+                (uint32_t)(value >> 32)
+        };
+
+        memcpy(out_ptr, new_seq, sizeof(new_seq));
+        return sizeof(new_seq);
+    }
+
+    static size_t fix_b_cond(uint32_t* out_ptr, uint32_t ins, void* old_addr, void* new_addr) {
+        LOGE("B_COND_ARM64");
+        uint64_t pc = (uint64_t)old_addr;
+
+        uint32_t imm19 = (ins & 0xFFFFE0) >> 5;
+        uint64_t value = pc + imm19 * 4;
+        if((imm19 >> 18) == 1) {
+            value = pc - 4 * (0x7ffff - imm19 + 1);
+        }
+
+        // 生成反向条件跳转
+        uint32_t new_seq[] = {
+                ((ins & 0xff00000f) + (32 << 3)) ^ 0x1,  // B.anti_cond 32
+                *((uint32_t*)value),                      // target instruction
+                0xa93f03e0,                              // STP X0, X0, [SP, #-0x10]
+                0x58000080,                              // LDR X0, 12
+                0xd61f0000,                              // BR X0
+                0x14000002,                              // B 8
+                (uint32_t)(value >> 32),
+                (uint32_t)(value & 0xffffffff)
+        };
+
+        memcpy(out_ptr, new_seq, sizeof(new_seq));
+        return sizeof(new_seq);
     }
 
 };
@@ -357,8 +461,8 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //            );
 
     HookInfo* hookInfo = createHook((void*)test, (void*)hook);
-//    test();
-    inline_unhook(hookInfo);
     test();
+    inline_unhook(hookInfo);
+//    test();
     return env->NewStringUTF(hello.c_str());
 }
