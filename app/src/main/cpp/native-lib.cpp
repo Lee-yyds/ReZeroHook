@@ -5,17 +5,11 @@
 #include <unistd.h>
 #include <cstdint>
 #include <android/log.h>
-#define LOG_TAG "InlineHook"
+#define LOG_TAG "jiqiu2021"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-
-inline bool is_addr_valid(void* addr) {
-    return addr && ((uintptr_t)addr % 4 == 0);  // ARM64指令必须4字节对齐
-}
-
-inline void clear_cache(void* addr, size_t size) {
-    __builtin___clear_cache((char*)addr, (char*)addr + size);
-}
+#include <map>
+#include <mutex>
 // 函数指针类型定义
 typedef void (*func_t)();
 
@@ -28,15 +22,60 @@ struct HookInfo{
     size_t original_code_size;
 };
 
+// 全局存储所有hook信息
+class HookManager {
+private:
+    static std::map<void*, HookInfo*> hook_map; // key是目标函数地址
+    static std::mutex hook_mutex;
+
+public:
+    static void registerHook(HookInfo* info) {
+        if (!info) return;
+        std::lock_guard<std::mutex> lock(hook_mutex);
+        hook_map[info->target_func] = info;
+    }
+
+    static HookInfo* getHook(void* target_func) {
+        std::lock_guard<std::mutex> lock(hook_mutex);
+        auto it = hook_map.find(target_func);
+        return (it != hook_map.end()) ? it->second : nullptr;
+    }
+
+    static void removeHook(void* target_func) {
+        std::lock_guard<std::mutex> lock(hook_mutex);
+        hook_map.erase(target_func);
+    }
+};
+
+// 初始化静态成员
+std::map<void*, HookInfo*> HookManager::hook_map;
+std::mutex HookManager::hook_mutex;
+inline bool is_addr_valid(void* addr) {
+    return addr && ((uintptr_t)addr % 4 == 0);  // ARM64指令必须4字节对齐
+}
+
+inline void clear_cache(void* addr, size_t size) {
+    __builtin___clear_cache((char*)addr, (char*)addr + size);
+}
+
 
 void test(){
-    __android_log_print(ANDROID_LOG_INFO, "myjiqiu", "test");
+    LOGI("Test function called");
 }
 
-void hook(){
-    __android_log_print(ANDROID_LOG_INFO, "myjiqiu", "hook");
-}
+void hook() {
+    LOGI("Hook function called");
 
+    // 获取调用者地址
+    void* caller = __builtin_return_address(0);
+    // 根据调用地址范围查找对应的HookInfo
+    HookInfo* info = HookManager::getHook(caller);
+
+    if(info && info->backup_func) {
+        // 调用原始函数
+        ((void(*)())info->backup_func)();
+    }
+}
 
 bool backup_orig_instructions(HookInfo* info) {
     if(!info || !info->target_func) return false;
@@ -91,6 +130,12 @@ bool create_jump(void* from, void* to, bool thumb) {
 
 HookInfo* createHook(void* target_func, void* hook_func) {
     if(!target_func || !hook_func) return nullptr;
+    // 检查是否已经被hook
+    HookInfo* existing = HookManager::getHook(target_func);
+    if(existing) {
+        LOGE("Function already hooked!");
+        return nullptr;
+    }
 
     // 创建HookInfo结构
     auto* hookInfo = new HookInfo();
@@ -138,13 +183,14 @@ HookInfo* createHook(void* target_func, void* hook_func) {
         delete hookInfo;
         return nullptr;
     }
-
+    HookManager::registerHook(hookInfo);
     return hookInfo;
 }
 
 
 bool inline_unhook(HookInfo* info) {
     if (!info) return false;
+    HookManager::removeHook(info->target_func);
 
     // 修改目标函数内存权限
     size_t page_size = sysconf(_SC_PAGESIZE);
@@ -179,6 +225,6 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
     HookInfo* hookInfo = createHook((void*)test, (void*)hook);
     test();
     inline_unhook(hookInfo);
-    test();
+//    test();
     return env->NewStringUTF(hello.c_str());
 }
