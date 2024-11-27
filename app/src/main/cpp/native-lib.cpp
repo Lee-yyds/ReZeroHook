@@ -286,7 +286,10 @@ struct HookInfo{
     size_t original_code_size;
     size_t total_size;
     // 增加寄存器回调函数指针
-    void (*register_callback)(RegisterContext* ctx, void* user_data);
+    void (*pre_callback)(RegisterContext* ctx, void* user_data);
+    // 执行后回调，增加返回值参数
+    void (*post_callback)(RegisterContext* ctx, uint64_t return_value, void* user_data);
+
     void* user_data;  // 用户自定义数据
 };
 static thread_local HookInfo* current_executing_hook = nullptr;
@@ -335,48 +338,80 @@ inline void clear_cache(void* addr, size_t size) {
 }
 
 
-void test(){
+uint64_t test(int a,int b,int c){
     LOGI("Test function called");
+    return 0x12345;
 }
 
 void hook() {
     LOGI("Hook function called");
-// 获取当前上下文
-    RegisterContext ctx;
-    // 通过内联汇编获取寄存器值
-    asm volatile(
-            "stp x0, x1, [%0, #0]\n"
-            "stp x2, x3, [%0, #16]\n"
-            "stp x4, x5, [%0, #32]\n"
-            "stp x6, x7, [%0, #48]\n"
-            "stp x8, x9, [%0, #64]\n"
-            "stp x10, x11, [%0, #80]\n"
-            "stp x12, x13, [%0, #96]\n"
-            "stp x14, x15, [%0, #112]\n"
-            "stp x16, x17, [%0, #128]\n"
-            "stp x18, x19, [%0, #144]\n"
-            "stp x20, x21, [%0, #160]\n"
-            "stp x22, x23, [%0, #176]\n"
-            "stp x24, x25, [%0, #192]\n"
-            "stp x26, x27, [%0, #208]\n"
-            "stp x28, x29, [%0, #224]\n"
-            "str x30, [%0, #240]\n"
-            "mov x16, sp\n"
-            "str x16, [%0, #248]\n"
-            : : "r"(&ctx.x[0]) : "x16", "memory"
-            );
 
     // 获取 hook 信息
     HookInfo* info = HookManager::getCurrentHook();
     if(info) {
         // 调用寄存器回调函数
-        if(info->register_callback) {
-            info->register_callback(&ctx, info->user_data);
-        }
+        // 获取当前上下文
+        RegisterContext ctx;
+        // 通过内联汇编获取寄存器值
+        asm volatile(
+                "stp x0, x1, [%0, #0]\n"
+                "stp x2, x3, [%0, #16]\n"
+                "stp x4, x5, [%0, #32]\n"
+                "stp x6, x7, [%0, #48]\n"
+                "stp x8, x9, [%0, #64]\n"
+                "stp x10, x11, [%0, #80]\n"
+                "stp x12, x13, [%0, #96]\n"
+                "stp x14, x15, [%0, #112]\n"
+                "stp x16, x17, [%0, #128]\n"
+                "stp x18, x19, [%0, #144]\n"
+                "stp x20, x21, [%0, #160]\n"
+                "stp x22, x23, [%0, #176]\n"
+                "stp x24, x25, [%0, #192]\n"
+                "stp x26, x27, [%0, #208]\n"
+                "stp x28, x29, [%0, #224]\n"
+                "str x30, [%0, #240]\n"
+                "mov x16, sp\n"
+                "str x16, [%0, #248]\n"
+                : : "r"(&ctx.x[0]) : "x16", "memory"
+                );
 
+        if(info->pre_callback) {
+            info->pre_callback(&ctx, info->user_data);
+        }
+        // 调用原始函数并保存返回值
+        uint64_t return_value = 0;
         // 调用原始函数
         if(info->backup_func) {
             ((void(*)())info->backup_func)();
+
+            RegisterContext post_ctx;
+            // 通过内联汇编获取寄存器值
+            asm volatile(
+                    "stp x0, x1, [%0, #0]\n"
+                    "stp x2, x3, [%0, #16]\n"
+                    "stp x4, x5, [%0, #32]\n"
+                    "stp x6, x7, [%0, #48]\n"
+                    "stp x8, x9, [%0, #64]\n"
+                    "stp x10, x11, [%0, #80]\n"
+                    "stp x12, x13, [%0, #96]\n"
+                    "stp x14, x15, [%0, #112]\n"
+                    "stp x16, x17, [%0, #128]\n"
+                    "stp x18, x19, [%0, #144]\n"
+                    "stp x20, x21, [%0, #160]\n"
+                    "stp x22, x23, [%0, #176]\n"
+                    "stp x24, x25, [%0, #192]\n"
+                    "stp x26, x27, [%0, #208]\n"
+                    "stp x28, x29, [%0, #224]\n"
+                    "str x30, [%0, #240]\n"
+                    "mov x16, sp\n"
+                    "str x16, [%0, #248]\n"
+                    : : "r"(&ctx.x[0]) : "x16", "memory"
+                    );
+            return_value = post_ctx.x[0];
+            // 执行后回调
+            if(info->post_callback) {
+                info->post_callback(&post_ctx, return_value, info->user_data);
+            }
         }
     }
 }
@@ -427,7 +462,8 @@ void default_register_callback(RegisterContext* ctx, void* user_data) {
 
 
 HookInfo* createHook(void* target_func, void* hook_func,
-                     void (*register_callback)(RegisterContext*, void*) = nullptr,
+                     void (*pre_callback)(RegisterContext*, void*) = nullptr,
+                     void (*post_callback)(RegisterContext*, uint64_t, void*) = nullptr,
                      void* user_data = nullptr) {
     LOGI("Creating hook - target: %p, hook: %p", target_func, hook_func);
     if(!target_func || !hook_func) return nullptr;
@@ -446,7 +482,8 @@ HookInfo* createHook(void* target_func, void* hook_func,
     memset(hookInfo, 0, sizeof(HookInfo));
     hookInfo->target_func = target_func;
     hookInfo->hook_func = hook_func;
-    hookInfo->register_callback = register_callback ? register_callback : default_register_callback;
+    hookInfo->pre_callback = pre_callback ? pre_callback : default_register_callback;
+    hookInfo->post_callback = post_callback;
     hookInfo->user_data = user_data;
     // 备份原始指令
     if (!backup_orig_instructions(hookInfo)) {
@@ -533,6 +570,11 @@ void my_register_callback(RegisterContext* ctx, void* user_data) {
     LOGI("X1 (Second argument): 0x%llx", ctx->x[1]);
     LOGI("LR (X30): 0x%llx", ctx->x[30]);
 }
+void post_hook_callback(RegisterContext* ctx, uint64_t return_value, void* user_data) {
+    LOGI("After function execution:");
+    LOGI("Return value: 0x%llx", return_value);
+    LOGI("Modified registers: x0=0x%llx, x1=0x%llx", ctx->x[0], ctx->x[1]);
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
         JNIEnv* env,
@@ -543,8 +585,10 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //            );
     const char* func_name = "test";
     HookInfo* hookInfo = createHook((void*)test, (void*)hook,
-                                    nullptr, (void*)func_name);
-    test();
+                                    nullptr,
+                                    post_hook_callback,
+                                    (void*)hello.c_str());
+    test(1,2,3);
     inline_unhook(hookInfo);
 //    test();
     return env->NewStringUTF(hello.c_str());
