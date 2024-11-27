@@ -17,6 +17,15 @@
 
 #define SH_UTIL_SIGN_EXTEND_64(x, len) \
   (((int64_t)((x) << (64u - (len)))) >> (64u - (len)))
+
+
+// 增加寄存器结构体定义
+struct RegisterContext {
+    uint64_t x[31];    // X0-X30
+    uint64_t sp;       // Stack Pointer
+    uint64_t pc;       // Program Counter
+    uint64_t pstate;   // Processor State
+};
 enum class ARM64_INS_TYPE {
     UNKNOW,
     ADR,        // 形如 ADR Xd, label
@@ -276,6 +285,9 @@ struct HookInfo{
     uint8_t original_code[1024];
     size_t original_code_size;
     size_t total_size;
+    // 增加寄存器回调函数指针
+    void (*register_callback)(RegisterContext* ctx, void* user_data);
+    void* user_data;  // 用户自定义数据
 };
 static thread_local HookInfo* current_executing_hook = nullptr;
 
@@ -329,15 +341,43 @@ void test(){
 
 void hook() {
     LOGI("Hook function called");
+// 获取当前上下文
+    RegisterContext ctx;
+    // 通过内联汇编获取寄存器值
+    asm volatile(
+            "stp x0, x1, [%0, #0]\n"
+            "stp x2, x3, [%0, #16]\n"
+            "stp x4, x5, [%0, #32]\n"
+            "stp x6, x7, [%0, #48]\n"
+            "stp x8, x9, [%0, #64]\n"
+            "stp x10, x11, [%0, #80]\n"
+            "stp x12, x13, [%0, #96]\n"
+            "stp x14, x15, [%0, #112]\n"
+            "stp x16, x17, [%0, #128]\n"
+            "stp x18, x19, [%0, #144]\n"
+            "stp x20, x21, [%0, #160]\n"
+            "stp x22, x23, [%0, #176]\n"
+            "stp x24, x25, [%0, #192]\n"
+            "stp x26, x27, [%0, #208]\n"
+            "stp x28, x29, [%0, #224]\n"
+            "str x30, [%0, #240]\n"
+            "mov x16, sp\n"
+            "str x16, [%0, #248]\n"
+            : : "r"(&ctx.x[0]) : "x16", "memory"
+            );
 
-    // 获取调用者地址
-//    void* caller = __builtin_return_address(0);
-    // 根据调用地址范围查找对应的HookInfo
+    // 获取 hook 信息
     HookInfo* info = HookManager::getCurrentHook();
+    if(info) {
+        // 调用寄存器回调函数
+        if(info->register_callback) {
+            info->register_callback(&ctx, info->user_data);
+        }
 
-    if(info && info->backup_func) {
         // 调用原始函数
-        ((void(*)())info->backup_func)();
+        if(info->backup_func) {
+            ((void(*)())info->backup_func)();
+        }
     }
 }
 
@@ -374,9 +414,21 @@ bool create_jump(void* from, void* to, bool thumb) {
 
     return true;
 }
+// 默认的寄存器打印回调函数
+void default_register_callback(RegisterContext* ctx, void* user_data) {
+    LOGI("Register dump:");
+    for(int i = 0; i < 31; i++) {
+        LOGI("X%d: 0x%llx", i, ctx->x[i]);
+    }
+    LOGI("SP: 0x%llx", ctx->sp);
+    LOGI("PC: 0x%llx", ctx->pc);
+    LOGI("PSTATE: 0x%llx", ctx->pstate);
+}
 
 
-HookInfo* createHook(void* target_func, void* hook_func) {
+HookInfo* createHook(void* target_func, void* hook_func,
+                     void (*register_callback)(RegisterContext*, void*) = nullptr,
+                     void* user_data = nullptr) {
     LOGI("Creating hook - target: %p, hook: %p", target_func, hook_func);
     if(!target_func || !hook_func) return nullptr;
     // 检查是否已经被hook
@@ -394,7 +446,8 @@ HookInfo* createHook(void* target_func, void* hook_func) {
     memset(hookInfo, 0, sizeof(HookInfo));
     hookInfo->target_func = target_func;
     hookInfo->hook_func = hook_func;
-
+    hookInfo->register_callback = register_callback ? register_callback : default_register_callback;
+    hookInfo->user_data = user_data;
     // 备份原始指令
     if (!backup_orig_instructions(hookInfo)) {
         delete hookInfo;
@@ -472,6 +525,14 @@ bool inline_unhook(HookInfo* info) {
     delete info;
     return true;
 }
+
+// 自定义寄存器回调函数
+void my_register_callback(RegisterContext* ctx, void* user_data) {
+    LOGI("Custom register dump for function: %s", (const char*)user_data);
+    LOGI("X0 (First argument): 0x%llx", ctx->x[0]);
+    LOGI("X1 (Second argument): 0x%llx", ctx->x[1]);
+    LOGI("LR (X30): 0x%llx", ctx->x[30]);
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
         JNIEnv* env,
@@ -480,8 +541,9 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //    __asm__ __volatile__(
 //            "b .\n" // 死循环
 //            );
-
-    HookInfo* hookInfo = createHook((void*)test, (void*)hook);
+    const char* func_name = "test";
+    HookInfo* hookInfo = createHook((void*)test, (void*)hook,
+                                    nullptr, (void*)func_name);
     test();
     inline_unhook(hookInfo);
 //    test();
