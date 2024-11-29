@@ -13,6 +13,8 @@
 
 #include <map>
 #include <mutex>
+#include <fcntl.h>
+#include <dlfcn.h>
 
 #define SH_UTIL_GET_BITS_32(x, start, end) \
   (((x) >> (end)) & ((1u << ((start) - (end) + 1u)) - 1u))
@@ -605,6 +607,8 @@ bool inline_unhook(HookInfo *info) {
 void my_register_callback(RegisterContext *ctx, void *user_data) {
     LOGI("Custom register dump for function: %s", (const char *) user_data);
     LOGI("X0 (First argument): 0x%llx", ctx->x[0]);
+    LOGI("X0 (First argument): %s", ctx->x[0]);
+
     LOGI("X1 (Second argument): 0x%llx", ctx->x[1]);
     LOGI("LR (X30): 0x%llx", ctx->x[30]);
 }
@@ -623,12 +627,14 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //    __asm__ __volatile__(
 //            "b .\n" // 死循环
 //            );
-    const char *func_name = "test";
-    HookInfo *hookInfo = createHook((void *) test, (void *) hook,
-                                    nullptr,
+    void * openaddr =dlsym(RTLD_DEFAULT, "open");
+    HookInfo *hookInfo = createHook((void *) openaddr, (void *) hook,
+                                    my_register_callback,
                                     post_hook_callback,
                                     (void *) hello.c_str());
-    test(1, 2, 3);
+//    test(1, 2, 3);
+    int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
+    LOGI("fd = %d", fd);
     inline_unhook(hookInfo);
 //    test();
     return env->NewStringUTF(hello.c_str());
