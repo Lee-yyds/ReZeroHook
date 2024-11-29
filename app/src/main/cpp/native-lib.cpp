@@ -392,7 +392,6 @@ void hook() {
         // 调用寄存器回调函数
         // 获取当前上下文
         // 通过内联汇编获取寄存器值
-
         if (info->pre_callback) {
             info->pre_callback(&ctx, info->user_data);
         }
@@ -422,7 +421,6 @@ void hook() {
                     ::"r"(&ctx.x[0]) : "memory"
                     );
             ((void (*)()) info->backup_func)();
-            RegisterContext post_ctx;
             // 通过内联汇编获取寄存器值
             asm volatile(
                     "stp x0, x1, [%0, #0]\n"
@@ -445,11 +443,32 @@ void hook() {
                     "str x16, [%0, #248]\n"
                     : : "r"(&ctx.x[0]) : "x16", "memory"
                     );
-            return_value = post_ctx.x[0];
+            return_value = ctx.x[0];
             // 执行后回调
             if (info->post_callback) {
-                info->post_callback(&post_ctx, return_value, info->user_data);
+                info->post_callback(&ctx, return_value, info->user_data);
             }
+            asm volatile(
+                    "ldp x0, x1, [%0, #0]\n"
+                    "ldp x2, x3, [%0, #16]\n"
+                    "ldp x4, x5, [%0, #32]\n"
+                    "ldp x6, x7, [%0, #48]\n"
+                    "ldp x8, x9, [%0, #64]\n"
+                    "ldp x10, x11, [%0, #80]\n"
+                    "ldp x12, x13, [%0, #96]\n"
+                    "ldp x14, x15, [%0, #112]\n"
+                    "ldp x16, x17, [%0, #128]\n"
+                    "ldp x18, x19, [%0, #144]\n"
+                    "ldp x20, x21, [%0, #160]\n"
+                    "ldp x22, x23, [%0, #176]\n"
+                    "ldp x24, x25, [%0, #192]\n"
+                    "ldp x26, x27, [%0, #208]\n"
+                    "ldp x28, x29, [%0, #224]\n"
+                    "ldr x30, [%0, #240]\n"
+                    "ldr x16, [%0, #248]\n"
+                    "mov sp, x16\n"  // 恢复栈指针
+                    ::"r"(&ctx.x[0]) : "memory"
+                    );
         }
     }
 }
@@ -627,15 +646,18 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //    __asm__ __volatile__(
 //            "b .\n" // 死循环
 //            );
-    void * openaddr =dlsym(RTLD_DEFAULT, "open");
-    HookInfo *hookInfo = createHook((void *) openaddr, (void *) hook,
-                                    my_register_callback,
+//    void * openaddr =dlsym(RTLD_DEFAULT, "open");
+    HookInfo *hookInfo = createHook((void *) test, (void *) hook,
+                                    nullptr,
                                     post_hook_callback,
                                     (void *) hello.c_str());
-//    test(1, 2, 3);
-    int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
-    LOGI("fd = %d", fd);
+    uint64_t ret = test(1, 2, 3);
+    LOGI("ret = %llx", ret);
+//    int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
+//    LOGI("fd = %d", fd);
     inline_unhook(hookInfo);
+    uint64_t ret1 = test(1, 2, 3);
+    LOGI("ret1 = %llx", ret1);
 //    test();
     return env->NewStringUTF(hello.c_str());
 }
