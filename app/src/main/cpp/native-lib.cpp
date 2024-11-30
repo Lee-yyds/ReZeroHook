@@ -15,6 +15,11 @@
 #include <mutex>
 #include <fcntl.h>
 #include <dlfcn.h>
+extern "C"
+{
+extern char two_jump_start[] asm("_twojump_start");
+extern char two_jump_end[] asm("_twojump_end");
+}
 
 #define SH_UTIL_GET_BITS_32(x, start, end) \
   (((x) >> (end)) & ((1u << ((start) - (end) + 1u)) - 1u))
@@ -286,8 +291,7 @@ private:
 
 };
 
-// 函数指针类型定义
-typedef void (*func_t)();
+
 
 
 struct HookInfo {
@@ -296,7 +300,6 @@ struct HookInfo {
     void *backup_func;
     uint8_t original_code[1024];
     size_t original_code_size;
-    size_t total_size;
 
     // 增加寄存器回调函数指针
     void (*pre_callback)(RegisterContext *ctx, void *user_data);
@@ -305,6 +308,8 @@ struct HookInfo {
     void (*post_callback)(RegisterContext *ctx, uint64_t return_value, void *user_data);
 
     void *user_data;  // 用户自定义数据
+    RegisterContext ctx;
+
 };
 
 static thread_local HookInfo *current_executing_hook = nullptr;
@@ -362,32 +367,11 @@ uint64_t test(int a, int b, int c) {
     return 0x12345;
 }
 
-void hook() {
-    RegisterContext ctx;
-    asm volatile(
-            "stp x0, x1, [%0, #0]\n"
-            "stp x2, x3, [%0, #16]\n"
-            "stp x4, x5, [%0, #32]\n"
-            "stp x6, x7, [%0, #48]\n"
-            "stp x8, x9, [%0, #64]\n"
-            "stp x10, x11, [%0, #80]\n"
-            "stp x12, x13, [%0, #96]\n"
-            "stp x14, x15, [%0, #112]\n"
-            "stp x16, x17, [%0, #128]\n"
-            "stp x18, x19, [%0, #144]\n"
-            "stp x20, x21, [%0, #160]\n"
-            "stp x22, x23, [%0, #176]\n"
-            "stp x24, x25, [%0, #192]\n"
-            "stp x26, x27, [%0, #208]\n"
-            "stp x28, x29, [%0, #224]\n"
-            "str x30, [%0, #240]\n"
-            "mov x16, sp\n"
-            "str x16, [%0, #248]\n"
-            : : "r"(&ctx.x[0]) : "x16", "memory"
-            );
+void hook(HookInfo *info) {
+
     LOGI("Hook function called");
     // 获取 hook 信息
-    HookInfo *info = HookManager::getCurrentHook();
+    RegisterContext ctx =info->ctx;
     if (info) {
         // 调用寄存器回调函数
         // 获取当前上下文
@@ -551,7 +535,7 @@ HookInfo *createHook(void *target_func, void *hook_func,
     }
 
     // 分配跳板内存
-    size_t trampoline_size = 256;
+    size_t trampoline_size = 1024;
     void *trampoline = mmap(nullptr, trampoline_size,
                             PROT_READ | PROT_WRITE | PROT_EXEC,
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -563,6 +547,21 @@ HookInfo *createHook(void *target_func, void *hook_func,
     LOGI("Trampoline allocated at %p", trampoline);
 
     hookInfo->backup_func = trampoline;
+//print two_jump_start two_jump_end addr
+    LOGI("two jump start addr = %p",two_jump_start);
+    LOGI("two jump end addr = %p",two_jump_end);
+
+    size_t two_jump_size =two_jump_end-two_jump_start;
+    memcpy(hookInfo->backup_func, two_jump_start, two_jump_size);
+    // 在预留的NOP位置写入地址
+    uint64_t info_addr = (uint64_t)hookInfo;
+    uint64_t hook_addr = (uint64_t)hookInfo->hook_func;
+
+// 填充HookInfo地址(前8字节)
+    memcpy(hookInfo->backup_func, &info_addr, sizeof(info_addr));
+
+// 填充hook函数地址(后8字节)
+    memcpy((uint8_t*)hookInfo->backup_func + 8, &hook_addr, sizeof(hook_addr));
 
     // 修复指令时记录指令信息
     uint32_t *orig = (uint32_t *) hookInfo->original_code;
@@ -574,18 +573,18 @@ HookInfo *createHook(void *target_func, void *hook_func,
             (uint32_t *) hookInfo->original_code,
             hookInfo->original_code_size,
             hookInfo->target_func,
-            hookInfo->backup_func
+            (uint32_t *)((uintptr_t)hookInfo->backup_func + two_jump_size)
     );
     void *return_addr = (uint8_t *) target_func + hookInfo->original_code_size;
     // 添加跳回原函数的跳转
-    if (!create_jump((uint8_t *) hookInfo->backup_func + fixed_size,
+    if (!create_jump((uint8_t *) hookInfo->backup_func + fixed_size+two_jump_size,
                      return_addr, false)) {
         munmap(trampoline, trampoline_size);
         delete hookInfo;
         return nullptr;
     }
     // 在目标函数处写入跳转到hook函数的代码
-    if (!create_jump(target_func, hook_func, false)) {
+    if (!create_jump(target_func, (uint8_t*)hookInfo->backup_func+16, false)) {
         munmap(trampoline, trampoline_size);
         delete hookInfo;
         return nullptr;
@@ -633,6 +632,8 @@ void my_register_callback(RegisterContext *ctx, void *user_data) {
 }
 
 void post_hook_callback(RegisterContext *ctx, uint64_t return_value, void *user_data) {
+    // 测试修改寄存器
+    ctx->x[0] = 0x12345678;
     LOGI("After function execution:");
     LOGI("Return value: 0x%llx", return_value);
     LOGI("Modified registers: x0=0x%llx, x1=0x%llx", ctx->x[0], ctx->x[1]);
@@ -651,6 +652,8 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
                                     nullptr,
                                     post_hook_callback,
                                     (void *) hello.c_str());
+
+
     uint64_t ret = test(1, 2, 3);
     LOGI("ret = %llx", ret);
 //    int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
