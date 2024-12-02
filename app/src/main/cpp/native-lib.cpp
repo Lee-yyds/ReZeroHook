@@ -298,18 +298,18 @@ struct HookInfo {
     void *target_func;
     void *hook_func;
     void *backup_func;
+
+    // 回调函数指针
+    void (*pre_callback)(RegisterContext *ctx, void *user_data);
+    void (*post_callback)(RegisterContext *ctx, uint64_t return_value, void *user_data);
+    void *user_data;
+
+    // 寄存器上下文
+    RegisterContext ctx;   // 移到前面
+
+    // 原始代码
     uint8_t original_code[1024];
     size_t original_code_size;
-
-    // 增加寄存器回调函数指针
-    void (*pre_callback)(RegisterContext *ctx, void *user_data);
-
-    // 执行后回调，增加返回值参数
-    void (*post_callback)(RegisterContext *ctx, uint64_t return_value, void *user_data);
-
-    void *user_data;  // 用户自定义数据
-    RegisterContext ctx;
-
 };
 
 static thread_local HookInfo *current_executing_hook = nullptr;
@@ -368,6 +368,7 @@ uint64_t test(int a, int b, int c) {
 }
 
 void hook(HookInfo *info) {
+    LOGI("hook info addr1 = %p",info);
 
     LOGI("Hook function called");
     // 获取 hook 信息
@@ -553,6 +554,7 @@ HookInfo *createHook(void *target_func, void *hook_func,
 
     size_t two_jump_size =two_jump_end-two_jump_start;
     memcpy(hookInfo->backup_func, two_jump_start, two_jump_size);
+    LOGI("hook info addr = %p",hookInfo);
     // 在预留的NOP位置写入地址
     uint64_t info_addr = (uint64_t)hookInfo;
     uint64_t hook_addr = (uint64_t)hookInfo->hook_func;
