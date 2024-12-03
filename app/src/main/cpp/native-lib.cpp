@@ -621,7 +621,8 @@ bool inline_unhook(HookInfo *info) {
 }
 
 // 自定义寄存器回调函数
-void my_register_callback(RegisterContext *ctx) {
+void my_register_callback(HookInfo *info) {
+    RegisterContext *ctx = &info->ctx;
     LOGI("X0 (First argument): 0x%llx", ctx->x[0]);
     LOGI("X0 (First argument): %s", ctx->x[0]);
 
@@ -632,7 +633,7 @@ void my_register_callback(RegisterContext *ctx) {
 void post_hook_callback(HookInfo *info) {
     RegisterContext *ctx = &info->ctx;
     // 测试修改寄存器
-    ctx->x[0] = 0x12345678;
+//    ctx->x[0] = 0x12345678;
     LOGI("After function execution:");
 //    LOGI("Return value: 0x%llx", return_value);
     LOGI("Modified registers: x0=0x%llx, x1=0x%llx", ctx->x[0], ctx->x[1]);
@@ -646,17 +647,17 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //    __asm__ __volatile__(
 //            "b .\n" // 死循环
 //            );
-//    void * openaddr =dlsym(RTLD_DEFAULT, "open");
-    HookInfo *hookInfo = createHook((void *) test, (void *) hook,
-                                    nullptr,
+    void * openaddr =dlsym(RTLD_DEFAULT, "open");
+    HookInfo *hookInfo = createHook((void *) openaddr, (void *) hook,
+                                    my_register_callback,
                                     post_hook_callback,
                                     (void *) hello.c_str());
 
 
     uint64_t ret = test(1, 2, 3,4);
     LOGI("ret = %llx", ret);
-//    int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
-//    LOGI("fd = %d", fd);
+    int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
+    LOGI("fd = %d", fd);
     inline_unhook(hookInfo);
     uint64_t ret1 = test(1, 2, 3,4);
     LOGI("ret1 = %llx", ret1);
