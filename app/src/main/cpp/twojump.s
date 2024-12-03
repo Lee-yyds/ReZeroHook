@@ -16,10 +16,12 @@ _twojump_start:
     stp x16, x17, [sp, #-0x10]!
      // 获取当前PC值
     ldr x16, _twojump_start
+    ldr x17, _twojump_start+8
+
     // 保存基地址到x19(因为后面还要用)
     // mov x19, x16
     // 加载hookinfo指针和hook函数指针
-    ldp x16, x17, [x16]
+    //ldp x16, x17, [x16]
     // 调整基址到 ctx 成员
     add x16, x16, #0x30
     // 保存寄存器到 HookInfo->ctx
@@ -81,8 +83,9 @@ _twojump_start:
     // 调用原函数
     ldr x17, [x16, #16]      // 加载原函数地址
     blr x17
+    //这里x0已经有返回值了
 
-    sub x16, x0, #48         // 获取HookInfo
+    ldr x16, _twojump_start
     add x17, x16, #48        // x17指向ctx
 
     // 再次保存寄存器到ctx
@@ -103,8 +106,28 @@ _twojump_start:
 
     // 调用post_callback
     mov x0, x16              // HookInfo作为第一个参数
-    ldr x16, [x16, #24]      // 加载post_callback
+    ldr x16, [x16, #8]      // 加载post_callback
     blr x16
+
+    // 恢复所有寄存器
+    ldr x16, _twojump_start
+    add x16, x16, #0x30
+    // 恢复所有寄存器 比如在hook里修改了，那这里就要还原了
+    ldp x0, x1, [x16, #0]
+    ldp x2, x3, [x17, #16]
+    ldp x4, x5, [x16, #32]
+    ldp x6, x7, [x16, #48]
+    ldp x8, x9, [x16, #64]
+    ldp x10, x11, [x16, #80]
+    ldp x12, x13, [x16, #96]
+    ldp x14, x15, [x16, #112]
+    ldp x18, x19, [x16, #144]
+    ldp x20, x21, [x16, #160]
+    ldp x22, x23, [x16, #176]
+    ldp x24, x25, [x16, #192]
+    ldp x26, x27, [x16, #208]
+    ldp x28, x29, [x16, #224]
+    ldr x30, [x16, #240]
     ret
 
 _twojump_end:

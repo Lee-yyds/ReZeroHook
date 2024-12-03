@@ -296,7 +296,7 @@ private:
 
 struct HookInfo {
     void (*pre_callback)(HookInfo *pHookInfo);
-    void (*post_callback)(RegisterContext *ctx, uint64_t return_value);
+    void (*post_callback)(HookInfo *ctx);
     void *backup_func;
     void *target_func;
     void *hook_func;
@@ -504,7 +504,7 @@ void default_register_callback(HookInfo *info) {
 
 HookInfo *createHook(void *target_func, void *hook_func,
                      void (*pre_callback)(HookInfo *) = nullptr,
-                     void (*post_callback)(RegisterContext *, uint64_t) = nullptr,
+                     void (*post_callback)(HookInfo *) = nullptr,
                      void *user_data = nullptr) {
     LOGI("Creating hook - target: %p, hook: %p", target_func, hook_func);
     if (!target_func || !hook_func) return nullptr;
@@ -632,11 +632,12 @@ void my_register_callback(RegisterContext *ctx) {
     LOGI("LR (X30): 0x%llx", ctx->x[30]);
 }
 
-void post_hook_callback(RegisterContext *ctx, uint64_t return_value) {
+void post_hook_callback(HookInfo *info) {
+    RegisterContext *ctx = &info->ctx;
     // 测试修改寄存器
     ctx->x[0] = 0x12345678;
     LOGI("After function execution:");
-    LOGI("Return value: 0x%llx", return_value);
+//    LOGI("Return value: 0x%llx", return_value);
     LOGI("Modified registers: x0=0x%llx, x1=0x%llx", ctx->x[0], ctx->x[1]);
 }
 
