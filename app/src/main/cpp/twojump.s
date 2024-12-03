@@ -8,8 +8,6 @@ _twojump_start:
     // 预留16字节存储地址
     .quad 0   // hookinfo 指针
     .quad 0   // hook函数指针
-    // 保存lr
-    stp x30, xzr, [sp, #-0x10]!
      // 保存原始x0-x1和sp
     stp x0, x1, [sp, #-0x10]!
     // 保存工作寄存器
@@ -17,23 +15,12 @@ _twojump_start:
      // 获取当前PC值
     ldr x16, _twojump_start
     ldr x17, _twojump_start+8
-
-    // 保存基地址到x19(因为后面还要用)
-    // mov x19, x16
-    // 加载hookinfo指针和hook函数指针
-    //ldp x16, x17, [x16]
-    // 调整基址到 ctx 成员
     add x16, x16, #0x30
     // 保存寄存器到 HookInfo->ctx
     ldp x0, x1, [sp], #0x10    // 恢复x16,x17
-    stp x0, x1, [x16, #128]  // 保存原始x16,x17 crash
+    stp x0, x1, [x16, #128]  // 保存原始x16,x17
     // 恢复x0,x1到临时寄存器
     ldp x0, x1, [sp], #0x10    // 从栈上加载原始x0,x1
-    // 恢复栈指针和原始sp值
-    ldp x30, xzr, [sp], #0x10  // 恢复lr
- //   ldp x2, x3, [sp], #16    // x3包含原始sp
- //   mov sp, x3               // 恢复原始sp值
-
     // 保存所有寄存器到ctx
     stp x0, x1, [x16, #0]
     stp x2, x3, [x16, #16]
@@ -50,22 +37,18 @@ _twojump_start:
     stp x26, x27, [x16, #208]
     stp x28, x29, [x16, #224]
     str x30, [x16, #240]
-    str x3, [x16, #248]      // 保存原始sp值
+    //str x3, [x16, #248]      // 保存原始sp值 这里没错，但是寄存器给错了
 
     // 调用pre_callback
-    sub x0, x16, #48         // HookInfo作为第一个参数
+    sub x0, x16, #0x30         // HookInfo作为第一个参数
     ldr x17, [x0]            // 加载pre_callback函数指针
     blr x17                  // 调用pre_callback
 
-    // 重新获取HookInfo指针(使用保存的基地址)
-    //ldp x16, x17, [x19]      // 从基地址重新加载HookInfo指针
-    //add x17, x16, #48        // x17指向ctx
-    // 计算基地址
     ldr x16, _twojump_start
     add x16, x16, #0x30
     // 恢复所有寄存器 比如在hook里修改了，那这里就要还原了
     ldp x0, x1, [x16, #0]
-    ldp x2, x3, [x17, #16]
+    ldp x2, x3, [x16, #16]
     ldp x4, x5, [x16, #32]
     ldp x6, x7, [x16, #48]
     ldp x8, x9, [x16, #64]

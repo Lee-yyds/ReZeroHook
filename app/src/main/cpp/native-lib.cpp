@@ -361,9 +361,9 @@ inline void clear_cache(void *addr, size_t size) {
 }
 
 
-uint64_t test(int a, int b, int c) {
+uint64_t test(int a, int b, int c,int d) {
     LOGI("Test function called");
-    LOGI("%d,%d,%d", a, b, c);
+    LOGI("%d,%d,%d %d", a, b, c,d);
     return 0x12345;
 }
 
@@ -496,9 +496,6 @@ void default_register_callback(HookInfo *info) {
     for (int i = 0; i < 31; i++) {
         LOGI("X%d: 0x%llx", i, ctx->x[i]);
     }
-    LOGI("SP: 0x%llx", ctx->sp);
-    LOGI("PC: 0x%llx", ctx->pc);
-    LOGI("PSTATE: 0x%llx", ctx->pstate);
 }
 
 
@@ -656,12 +653,12 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
                                     (void *) hello.c_str());
 
 
-    uint64_t ret = test(1, 2, 3);
+    uint64_t ret = test(1, 2, 3,4);
     LOGI("ret = %llx", ret);
 //    int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
 //    LOGI("fd = %d", fd);
     inline_unhook(hookInfo);
-    uint64_t ret1 = test(1, 2, 3);
+    uint64_t ret1 = test(1, 2, 3,4);
     LOGI("ret1 = %llx", ret1);
 //    test();
     return env->NewStringUTF(hello.c_str());
