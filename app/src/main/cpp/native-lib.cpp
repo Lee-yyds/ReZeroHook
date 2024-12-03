@@ -417,7 +417,7 @@ HookInfo *createHook(void *target_func,
                      void (*pre_callback)(HookInfo *) = nullptr,
                      void (*post_callback)(HookInfo *) = nullptr,
                      void *user_data = nullptr) {
-    LOGI("Creating hook - target: %p, hook: %p", target_func);
+    LOGI("Creating hook - target: %p", target_func);
     if (!target_func ) return nullptr;
     // 检查是否已经被hook
     HookInfo *existing = HookManager::getHook(target_func);
@@ -565,13 +565,17 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
                                     my_register_callback,
                                     post_hook_callback,
                                     (void *) hello.c_str());
-
-
+    HookInfo *hookInfo1 = createHook((void *) test,
+                                     nullptr,
+                                    post_hook_callback,
+                                    (void *) hello.c_str());
     uint64_t ret = test(1, 2, 3,4);
     LOGI("ret = %llx", ret);
     int fd =open("/data/data/com.example.inlinehookstudy/files/123.txt", O_CREAT | O_RDWR, 0666);
     LOGI("fd = %d", fd);
     inline_unhook(hookInfo);
+    inline_unhook(hookInfo1);
+
     uint64_t ret1 = test(1, 2, 3,4);
     LOGI("ret1 = %llx", ret1);
 //    test();
