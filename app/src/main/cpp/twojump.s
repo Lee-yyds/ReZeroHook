@@ -24,6 +24,9 @@ pc_get:
     // 计算基地址
     sub x16, x17, #(pc_get - _twojump_start)
 
+    // 保存基地址到x19(因为后面还要用)
+    mov x19, x16
+
     // 加载hookinfo指针和hook函数指针
     ldp x16, x17, [x16]
 
@@ -63,8 +66,8 @@ pc_get:
     ldr x17, [x0]            // 加载pre_callback函数指针
     blr x17                  // 调用pre_callback
 
-    // 恢复寄存器准备调用hook函数
-    sub x16, x0, #48         // 重新获取HookInfo
+    // 重新获取HookInfo指针(使用保存的基地址)
+    ldp x16, x17, [x19]      // 从基地址重新加载HookInfo指针
     add x17, x16, #48        // x17指向ctx
 
     ldp x0, x1, [x17, #0]    // 恢复所有寄存器
@@ -84,7 +87,6 @@ pc_get:
     ldr x30, [x17, #240]
     ldr x1, [x17, #248]
     mov sp, x1
-
     // 调用原函数
     ldr x17, [x16, #16]      // 加载原函数地址
     blr x17

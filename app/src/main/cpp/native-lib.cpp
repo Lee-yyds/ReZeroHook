@@ -295,8 +295,8 @@ private:
 
 
 struct HookInfo {
-    void (*pre_callback)(HookInfo *pHookInfo, void *user_data);
-    void (*post_callback)(RegisterContext *ctx, uint64_t return_value, void *user_data);
+    void (*pre_callback)(HookInfo *pHookInfo);
+    void (*post_callback)(RegisterContext *ctx, uint64_t return_value);
     void *backup_func;
     void *target_func;
     void *hook_func;
@@ -427,9 +427,9 @@ void hook(HookInfo *info) {
                 );
         return_value = ctx.x[0];
         // 执行后回调
-        if (info->post_callback) {
-            info->post_callback(&ctx, return_value, info->user_data);
-        }
+//        if (info->post_callback) {
+//            info->post_callback(&ctx, return_value, info->user_data);
+//        }
         asm volatile(
                 "ldp x0, x1, [%0, #0]\n"
                 "ldp x2, x3, [%0, #16]\n"
@@ -490,7 +490,7 @@ bool create_jump(void *from, void *to, bool thumb) {
 }
 
 // 默认的寄存器打印回调函数
-void default_register_callback(HookInfo *info, void *user_data) {
+void default_register_callback(HookInfo *info) {
     RegisterContext *ctx = &info->ctx;
     LOGI("Register dump:");
     for (int i = 0; i < 31; i++) {
@@ -503,8 +503,8 @@ void default_register_callback(HookInfo *info, void *user_data) {
 
 
 HookInfo *createHook(void *target_func, void *hook_func,
-                     void (*pre_callback)(HookInfo *, void *) = nullptr,
-                     void (*post_callback)(RegisterContext *, uint64_t, void *) = nullptr,
+                     void (*pre_callback)(HookInfo *) = nullptr,
+                     void (*post_callback)(RegisterContext *, uint64_t) = nullptr,
                      void *user_data = nullptr) {
     LOGI("Creating hook - target: %p, hook: %p", target_func, hook_func);
     if (!target_func || !hook_func) return nullptr;
@@ -588,6 +588,7 @@ HookInfo *createHook(void *target_func, void *hook_func,
         delete hookInfo;
         return nullptr;
     }
+    hookInfo->backup_func=(uint8_t*)hookInfo->backup_func+two_jump_size;
     HookManager::registerHook(hookInfo);
     return hookInfo;
 }
@@ -621,8 +622,7 @@ bool inline_unhook(HookInfo *info) {
 }
 
 // 自定义寄存器回调函数
-void my_register_callback(RegisterContext *ctx, void *user_data) {
-    LOGI("Custom register dump for function: %s", (const char *) user_data);
+void my_register_callback(RegisterContext *ctx) {
     LOGI("X0 (First argument): 0x%llx", ctx->x[0]);
     LOGI("X0 (First argument): %s", ctx->x[0]);
 
@@ -630,7 +630,7 @@ void my_register_callback(RegisterContext *ctx, void *user_data) {
     LOGI("LR (X30): 0x%llx", ctx->x[30]);
 }
 
-void post_hook_callback(RegisterContext *ctx, uint64_t return_value, void *user_data) {
+void post_hook_callback(RegisterContext *ctx, uint64_t return_value) {
     // 测试修改寄存器
     ctx->x[0] = 0x12345678;
     LOGI("After function execution:");
