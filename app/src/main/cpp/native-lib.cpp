@@ -590,6 +590,8 @@ HookInfo *createHook(void *target_func, void *hook_func,
     }
     hookInfo->backup_func=(uint8_t*)hookInfo->backup_func+two_jump_size;
     HookManager::registerHook(hookInfo);
+    LOGI("hookinfo addr %p",hookInfo);
+    LOGI("ctx addr %p",&hookInfo->ctx.x[0]);
     return hookInfo;
 }
 

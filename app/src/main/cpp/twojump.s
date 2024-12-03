@@ -9,43 +9,36 @@ _twojump_start:
     .quad 0   // hook函数指针
 
 get_data:
-    // 保存原始sp
-    mov x1, sp
-    // 保存原始x0-x1和sp
-    stp x0, x1, [sp, #-16]!
+    // 保存lr
+    stp x30, xzr, [sp, #-0x10]!
+     // 保存原始x0-x1和sp
+    stp x0, x1, [sp, #-0x10]!
     // 保存工作寄存器
-    stp x16, x17, [sp, #-16]!
-
-    // 获取当前PC值
-    mov x16, #0
+    stp x16, x17, [sp, #-0x10]!
+     // 获取当前PC值
     bl pc_get
 pc_get:
     mov x17, x30
-    mov x30, x16
-
     // 计算基地址
     sub x16, x17, #(pc_get - _twojump_start)
-
     // 保存基地址到x19(因为后面还要用)
     mov x19, x16
-
     // 加载hookinfo指针和hook函数指针
     ldp x16, x17, [x16]
 
-    // 恢复x0,x1到临时寄存器
-    ldp x2, x3, [sp, #16]    // 从栈上加载原始x0,x1
 
     // 调整基址到 ctx 成员
     add x16, x16, #48
     // 保存寄存器到 HookInfo->ctx
-    ldp x0, x1, [sp], #16    // 恢复x16,x17
-    stp x0, x1, [x16, #128]  // 保存原始x16,x17
-    mov x0, x2               // 恢复原始x0
-    mov x1, x3               // 恢复原始x1
+    ldp x0, x1, [sp], #0x10    // 恢复x16,x17
+    stp x0, x1, [x16, #128]  // 保存原始x16,x17 crash
+    // 恢复x0,x1到临时寄存器
+    ldp x0, x1, [sp], #0x10    // 从栈上加载原始x0,x1
 
     // 恢复栈指针和原始sp值
-    ldp x2, x3, [sp], #16    // x3包含原始sp
-    mov sp, x3               // 恢复原始sp值
+    ldp x30, xzr, [sp], #0x10  // 恢复lr
+ //   ldp x2, x3, [sp], #16    // x3包含原始sp
+ //   mov sp, x3               // 恢复原始sp值
 
     // 保存所有寄存器到ctx
     stp x0, x1, [x16, #0]
@@ -105,7 +98,8 @@ pc_get:
     // 保存当前sp以便后续恢复
     mov x1, sp
 
-    // 保存工作寄存器
+    // 保存工作寄存器和lr
+    stp x30, xzr, [sp, #-16]!
     stp x16, x17, [sp, #-16]!
 
     sub x16, x0, #48         // 获取HookInfo
@@ -136,7 +130,8 @@ pc_get:
     blr x16
 
     // 最后恢复
-    ldp x16, x17, [sp], #16  // 恢复工作寄存器和sp
+    ldp x16, x17, [sp], #16  // 恢复工作寄存器
+    ldp x30, xzr, [sp], #16  // 恢复lr
     mov x0, x19              // 恢复返回值
     ret
 
