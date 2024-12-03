@@ -367,92 +367,6 @@ uint64_t test(int a, int b, int c,int d) {
     return 0x12345;
 }
 
-void hook(HookInfo *info) {
-    // 获取 hook 信息
-    RegisterContext ctx =info->ctx;
-    HookInfo * addr = info;
-    if (info) {
-        // 调用寄存器回调函数
-        // 获取当前上下文
-        // 通过内联汇编获取寄存器值
-//        if (info->pre_callback) {
-//            info->pre_callback(&ctx, info->user_data);
-//        }
-        // 调用原始函数并保存返回值
-        uint64_t return_value = 0;
-        // 调用原始函数
-        asm volatile(
-                "ldp x0, x1, [%0, #0]\n"
-                "ldp x2, x3, [%0, #16]\n"
-                "ldp x4, x5, [%0, #32]\n"
-                "ldp x6, x7, [%0, #48]\n"
-                "ldp x8, x9, [%0, #64]\n"
-                "ldp x10, x11, [%0, #80]\n"
-                "ldp x12, x13, [%0, #96]\n"
-                "ldp x14, x15, [%0, #112]\n"
-                "ldp x16, x17, [%0, #128]\n"
-                "ldp x18, x19, [%0, #144]\n"
-                "ldp x20, x21, [%0, #160]\n"
-                "ldp x22, x23, [%0, #176]\n"
-                "ldp x24, x25, [%0, #192]\n"
-                "ldp x26, x27, [%0, #208]\n"
-                "ldp x28, x29, [%0, #224]\n"
-                "ldr x30, [%0, #240]\n"
-                "ldr x16, [%0, #248]\n"
-                "mov sp, x16\n"  // 恢复栈指针
-                ::"r"(&ctx.x[0]) : "memory"
-                );
-        ((void (*)()) info->backup_func)();
-        // 通过内联汇编获取寄存器值
-        asm volatile(
-                "stp x0, x1, [%0, #0]\n"
-                "stp x2, x3, [%0, #16]\n"
-                "stp x4, x5, [%0, #32]\n"
-                "stp x6, x7, [%0, #48]\n"
-                "stp x8, x9, [%0, #64]\n"
-                "stp x10, x11, [%0, #80]\n"
-                "stp x12, x13, [%0, #96]\n"
-                "stp x14, x15, [%0, #112]\n"
-                "stp x16, x17, [%0, #128]\n"
-                "stp x18, x19, [%0, #144]\n"
-                "stp x20, x21, [%0, #160]\n"
-                "stp x22, x23, [%0, #176]\n"
-                "stp x24, x25, [%0, #192]\n"
-                "stp x26, x27, [%0, #208]\n"
-                "stp x28, x29, [%0, #224]\n"
-                "str x30, [%0, #240]\n"
-                "mov x16, sp\n"
-                "str x16, [%0, #248]\n"
-                : : "r"(&ctx.x[0]) : "x16", "memory"
-                );
-        return_value = ctx.x[0];
-        // 执行后回调
-//        if (info->post_callback) {
-//            info->post_callback(&ctx, return_value, info->user_data);
-//        }
-        asm volatile(
-                "ldp x0, x1, [%0, #0]\n"
-                "ldp x2, x3, [%0, #16]\n"
-                "ldp x4, x5, [%0, #32]\n"
-                "ldp x6, x7, [%0, #48]\n"
-                "ldp x8, x9, [%0, #64]\n"
-                "ldp x10, x11, [%0, #80]\n"
-                "ldp x12, x13, [%0, #96]\n"
-                "ldp x14, x15, [%0, #112]\n"
-                "ldp x16, x17, [%0, #128]\n"
-                "ldp x18, x19, [%0, #144]\n"
-                "ldp x20, x21, [%0, #160]\n"
-                "ldp x22, x23, [%0, #176]\n"
-                "ldp x24, x25, [%0, #192]\n"
-                "ldp x26, x27, [%0, #208]\n"
-                "ldp x28, x29, [%0, #224]\n"
-                "ldr x30, [%0, #240]\n"
-                "ldr x16, [%0, #248]\n"
-                "mov sp, x16\n"  // 恢复栈指针
-                ::"r"(&ctx.x[0]) : "memory"
-                );
-    }
-}
 
 bool backup_orig_instructions(HookInfo *info) {
     if (!info || !info->target_func) return false;
@@ -499,12 +413,12 @@ void default_register_callback(HookInfo *info) {
 }
 
 
-HookInfo *createHook(void *target_func, void *hook_func,
+HookInfo *createHook(void *target_func,
                      void (*pre_callback)(HookInfo *) = nullptr,
                      void (*post_callback)(HookInfo *) = nullptr,
                      void *user_data = nullptr) {
-    LOGI("Creating hook - target: %p, hook: %p", target_func, hook_func);
-    if (!target_func || !hook_func) return nullptr;
+    LOGI("Creating hook - target: %p, hook: %p", target_func);
+    if (!target_func ) return nullptr;
     // 检查是否已经被hook
     HookInfo *existing = HookManager::getHook(target_func);
     if (existing) {
@@ -519,7 +433,6 @@ HookInfo *createHook(void *target_func, void *hook_func,
     // 初始化结构
     memset(hookInfo, 0, sizeof(HookInfo));
     hookInfo->target_func = target_func;
-    hookInfo->hook_func = hook_func;
     hookInfo->pre_callback = pre_callback ? pre_callback : default_register_callback;
     hookInfo->post_callback = post_callback;
     hookInfo->user_data = user_data;
@@ -648,7 +561,7 @@ Java_com_example_inlinehookstudy_MainActivity_stringFromJNI(
 //            "b .\n" // 死循环
 //            );
     void * openaddr =dlsym(RTLD_DEFAULT, "open");
-    HookInfo *hookInfo = createHook((void *) openaddr, (void *) hook,
+    HookInfo *hookInfo = createHook((void *) openaddr,
                                     my_register_callback,
                                     post_hook_callback,
                                     (void *) hello.c_str());
